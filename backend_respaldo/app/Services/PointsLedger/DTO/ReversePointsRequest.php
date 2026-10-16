@@ -9,6 +9,8 @@ final readonly class ReversePointsRequest
         public string $reason,
         public string $idempotencyKey,
         public array $metadata = [],
+        public ?string $actorId = null,
+        public ?string $actorRole = null,
     ) {
     }
 }

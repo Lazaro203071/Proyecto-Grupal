@@ -23,9 +23,14 @@ const avatarColor = computed(() => {
 })
 
 function goToRewards() {
-  if (currentRole.value === 'student')   router.push('/recompensas/alumno')
-  if (currentRole.value === 'professor') router.push('/recompensas/profesor')
-  if (currentRole.value === 'admin')     router.push('/recompensas/admin')
+  if (currentRole.value === 'student')        router.push('/recompensas/alumno')
+  else if (currentRole.value === 'professor') router.push('/recompensas/profesor')
+  else                                        router.push('/recompensas/admin')
+}
+
+async function handleRoleChange(newRole) {
+  await setRole(newRole)
+  goToRewards()
 }
 </script>
 
@@ -50,10 +55,11 @@ function goToRewards() {
       <!-- Selector de rol (solo desarrollo) -->
       <div class="dev-selector" title="Selector de rol (solo desarrollo)">
         <span class="dev-label">ROL:</span>
-        <select :value="currentRole" @change="e => { setRole(e.target.value); goToRewards() }" class="role-select">
+        <select :value="currentRole" @change="e => handleRoleChange(e.target.value)" class="role-select">
           <option value="student">Alumno</option>
           <option value="professor">Profesor</option>
           <option value="admin">Admin</option>
+          <option value="platform_admin">Super Admin</option>
         </select>
       </div>
 

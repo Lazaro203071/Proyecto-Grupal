@@ -1,8 +1,39 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import StatusBadge from '../../components/ui/StatusBadge.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import { campaignsMock } from '../../mocks/rewards.js'
+import { api } from '../../services/api.js'
+
+const campaigns = ref([...campaignsMock])
+const isLoading = ref(true)
+
+async function loadCampaigns() {
+  try {
+    isLoading.value = true
+    const res = await api.campaigns.list()
+    const list = Array.isArray(res) ? res : (res.data || [])
+    if (list.length > 0) {
+      campaigns.value = list.map(c => ({
+        id: c._id || c.id,
+        title: c.name,
+        multiplier: c.multiplier ? `${c.multiplier}x` : '1.5x',
+        status: (c.status === 'active' || c.status === 'Activa') ? 'Activa' : 'Borrador',
+        description: c.description || 'Campaña especial para la comunidad universitaria.',
+        period: c.start_date ? `${c.start_date.slice(0, 10)} al ${c.end_date?.slice(0, 10) || 'permanente'}` : 'Vigente',
+        scope: c.type === 'academic' ? 'Académica' : 'Campus Global',
+      }))
+    }
+  } catch (err) {
+    console.warn('Usando campañas locales:', err)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadCampaigns()
+})
 </script>
 
 <template>
@@ -13,8 +44,9 @@ import { campaignsMock } from '../../mocks/rewards.js'
       <p class="page-desc">Participa y gana puntos extra en campañas universitarias.</p>
     </div>
 
-    <div class="campaigns-list">
-      <div v-for="c in campaignsMock" :key="c.id" class="campaign-card card">
+    <EmptyState v-if="!isLoading && !campaigns.length" title="Sin campañas activas" message="Pronto habrá nuevas campañas disponibles." icon="📢" />
+    <div v-else class="campaigns-list">
+      <div v-for="c in campaigns" :key="c.id" class="campaign-card card">
         <div class="camp-badge">
           <span class="multiplier-chip">{{ c.multiplier }}</span>
         </div>
@@ -29,7 +61,6 @@ import { campaignsMock } from '../../mocks/rewards.js'
             <span class="meta-item">🌐 {{ c.scope }}</span>
           </div>
         </div>
-        <button class="btn btn-primary btn-sm">Ver detalle</button>
       </div>
     </div>
   </div>

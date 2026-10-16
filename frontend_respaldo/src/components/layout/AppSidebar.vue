@@ -25,7 +25,8 @@ const professorMenu = [
 ]
 
 const adminMenu = [
-  { key: 'admin-ledger',      label: '7.1 Ledger global de puntos', icon: '📒', route: '/recompensas/admin' },
+  { key: 'admin-dashboard',   label: 'Panel de control',            icon: '📊', route: '/recompensas/admin' },
+  { key: 'admin-ledger',      label: '7.1 Ledger global de puntos', icon: '📒', route: '/recompensas/admin/ledger' },
   { key: 'admin-businesses',  label: '7.2 Adhesión de negocios',    icon: '🏢', route: '/recompensas/admin/negocios' },
   { key: 'admin-rules',       label: '7.3 Reglas de acumulación',   icon: '⚙', route: '/recompensas/admin/reglas' },
   { key: 'admin-catalog',     label: '7.4 Catálogo de recompensas', icon: '🎁', route: '/recompensas/admin/catalogo' },

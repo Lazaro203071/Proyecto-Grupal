@@ -17,6 +17,8 @@ final readonly class EarnPointsRequest
         public string $idempotencyKey,
         public ?string $campaignId = null,
         public array $metadata = [],
+        public ?string $actorId = null,
+        public ?string $actorRole = null,
     ) {
     }
 }

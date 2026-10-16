@@ -10,6 +10,8 @@ final readonly class RedeemPointsRequest
         public int $pointsRequired,
         public string $idempotencyKey,
         public array $metadata = [],
+        public ?string $actorId = null,
+        public ?string $actorRole = null,
     ) {
     }
 }

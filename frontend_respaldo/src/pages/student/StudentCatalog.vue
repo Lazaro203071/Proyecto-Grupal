@@ -1,24 +1,108 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import ConfirmModal from '../../components/ui/ConfirmModal.vue'
 import { useToast } from '../../composables/useToast.js'
 import { rewardsMock } from '../../mocks/rewards.js'
+import { api } from '../../services/api.js'
 
-const { success } = useToast()
+const { success, error } = useToast()
 const selected = ref(null)
 const showModal = ref(false)
+const isSubmitting = ref(false)
+const balance = ref(1250)
+const rewards = ref([...rewardsMock])
+const isLoading = ref(true)
+
+function getRewardImage(reward) {
+  if (reward.image) return reward.image
+  const name = (reward.name || '').toLowerCase()
+  if (name.includes('termo') || name.includes('taza') || name.includes('botella')) return '☕'
+  if (name.includes('libro') || name.includes('cuaderno') || name.includes('agenda')) return '📚'
+  if (name.includes('sudadera') || name.includes('playera') || name.includes('gorra')) return '👕'
+  if (name.includes('descuento') || name.includes('cupon') || name.includes('cafeteria')) return '🥪'
+  if (name.includes('laptop') || name.includes('mochila') || name.includes('usb')) return '🎒'
+  return '🎁'
+}
+
+async function loadData() {
+  try {
+    isLoading.value = true
+    const [balanceRes, rewardsRes] = await Promise.allSettled([
+      api.points.getMyBalance(),
+      api.rewards.list(),
+    ])
+
+    if (balanceRes.status === 'fulfilled' && balanceRes.value) {
+      balance.value = balanceRes.value.balance ?? balance.value
+    }
+
+    if (rewardsRes.status === 'fulfilled' && rewardsRes.value) {
+      const list = Array.isArray(rewardsRes.value) ? rewardsRes.value : (rewardsRes.value.data || [])
+      if (list.length > 0) {
+        rewards.value = list.map(r => ({
+          id: r._id || r.id,
+          _id: r._id || r.id,
+          name: r.name,
+          business: r.business_name || (r.business_id ? 'Comercio Asociado' : 'Campus Store'),
+          points: r.points_required ?? r.points,
+          stock: r.stock !== null ? (r.stock - (r.reserved_stock || 0)) : 99,
+          validUntil: r.valid_until ? r.valid_until.slice(0, 10) : 'Sin expiración',
+          status: (r.status === 'active' || r.status === 'Activo') ? 'Activo' : 'Agotado',
+          image: getRewardImage(r),
+        }))
+      }
+    }
+  } catch (err) {
+    console.warn('Usando catálogo local:', err)
+  } finally {
+    isLoading.value = false
+  }
+}
 
 function openRedeem(r) {
   selected.value = r
   showModal.value = true
 }
-function confirmRedeem() {
-  showModal.value = false
-  success(`¡Canje de "${selected.value.name}" realizado con éxito!`)
-  selected.value = null
+
+async function confirmRedeem() {
+  if (!selected.value) return
+
+  try {
+    isSubmitting.value = true
+    const payload = {
+      reward_id: selected.value._id || selected.value.id,
+    }
+
+    const res = await api.redemptions.create(payload)
+    showModal.value = false
+
+    const code = res?.redemption?.redemption_code || 'CJ-EXITOSO'
+    success(`¡Canje de "${selected.value.name}" exitoso! Código: ${code}`)
+
+    if (res?.account?.balance !== undefined) {
+      balance.value = res.account.balance
+    } else {
+      balance.value = Math.max(0, balance.value - selected.value.points)
+    }
+
+    // Actualizar stock localmente
+    selected.value.stock = Math.max(0, selected.value.stock - 1)
+    selected.value = null
+
+    // Recargar catálogo en background
+    loadData()
+  } catch (err) {
+    console.error('Error al canjear recompensa:', err)
+    error(err.message || 'No se pudo procesar el canje.')
+    showModal.value = false
+  } finally {
+    isSubmitting.value = false
+  }
 }
 
-const balance = 3420
+onMounted(() => {
+  loadData()
+})
 </script>
 
 <template>
@@ -35,7 +119,7 @@ const balance = 3420
     </div>
 
     <div class="catalog-grid">
-      <div v-for="r in rewardsMock.filter(r => r.status === 'Activo')" :key="r.id" class="reward-card card">
+      <div v-for="r in rewards.filter(r => r.status === 'Activo' && r.stock > 0)" :key="r.id" class="reward-card card">
         <div class="rc-image">{{ r.image }}</div>
         <div class="rc-info">
           <div class="rc-name">{{ r.name }}</div>
@@ -48,7 +132,7 @@ const balance = 3420
         </div>
         <button
           class="btn btn-primary btn-sm"
-          :disabled="r.points > balance"
+          :disabled="r.points > balance || isSubmitting"
           @click="openRedeem(r)"
         >
           {{ r.points > balance ? 'Puntos insuficientes' : 'Canjear' }}
@@ -61,6 +145,7 @@ const balance = 3420
       title="Confirmar canje"
       :message="`¿Deseas canjear '${selected?.name}' por ${selected?.points?.toLocaleString()} puntos?`"
       confirm-label="Sí, canjear"
+      :disabled="isSubmitting"
       @confirm="confirmRedeem"
       @cancel="showModal = false"
     />

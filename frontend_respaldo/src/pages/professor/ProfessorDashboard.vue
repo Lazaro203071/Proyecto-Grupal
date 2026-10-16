@@ -7,28 +7,77 @@ import ConfirmModal from '../../components/ui/ConfirmModal.vue'
 import { useToast } from '../../composables/useToast.js'
 import { professorDashboardMock } from '../../mocks/rewards.js'
 
-const router = useRouter()
-const { success } = useToast()
-const data = professorDashboardMock
+import { onMounted } from 'vue'
+import { api } from '../../services/api.js'
 
-const redemptions = ref([...data.pendingRedemptions])
+const router = useRouter()
+const { success, error } = useToast()
+const data = ref({ ...professorDashboardMock })
+
+const redemptions = ref([...data.value.pendingRedemptions])
 const selectedRd = ref(null)
 const showModal = ref(false)
+const isLoading = ref(true)
+
+async function loadDashboard() {
+  try {
+    isLoading.value = true
+    const stats = await api.dashboard.getStats()
+    if (stats) {
+      data.value.balance = stats.balance ?? data.value.balance
+      data.value.pendingValidations = stats.pending_validations ?? data.value.pendingValidations
+      data.value.activeCampaigns = stats.active_campaigns ?? data.value.activeCampaigns
+      if (stats.pending_redemptions && stats.pending_redemptions.length) {
+        redemptions.value = stats.pending_redemptions.map(r => ({
+          id: r._id || r.id,
+          _id: r._id || r.id,
+          student: r.student?.name || 'Estudiante',
+          initials: r.student?.name ? r.student.name.split(' ').map(n=>n[0]).join('').slice(0,2) : 'AL',
+          reward: r.reward?.name || 'Recompensa',
+          code: r.redemption_code,
+          points: r.points_spent,
+          date: r.requested_at ? r.requested_at.slice(0, 10) : 'Hoy',
+          status: 'Pendiente',
+        }))
+      }
+    }
+  } catch (err) {
+    console.warn('Usando dashboard local de profesor:', err)
+  } finally {
+    isLoading.value = false
+  }
+}
 
 function openValidate(rd) {
   selectedRd.value = rd
   showModal.value = true
 }
-function confirmValidate() {
-  redemptions.value = redemptions.value.map(r =>
-    r.id === selectedRd.value.id ? { ...r, status: 'Validado' } : r
-  )
-  showModal.value = false
-  success(`Canje de ${selectedRd.value.student} validado correctamente.`)
+
+async function confirmValidate() {
+  if (!selectedRd.value) return
+  try {
+    await api.redemptions.deliver(selectedRd.value._id || selectedRd.value.id, {
+      note: 'Validado y entregado desde el panel docente',
+    })
+    redemptions.value = redemptions.value.map(r =>
+      r.id === selectedRd.value.id ? { ...r, status: 'Entregado' } : r
+    )
+    showModal.value = false
+    success(`Canje de ${selectedRd.value.student} entregado y registrado exitosamente.`)
+    selectedRd.value = null
+  } catch (err) {
+    console.error('Error al entregar canje:', err)
+    error(err.message || 'No se pudo validar el canje.')
+    showModal.value = false
+  }
 }
 
 const colors = ['#2878ED','#16a34a','#d97706','#7c3aed']
 function avatarColor(idx) { return colors[idx % colors.length] }
+
+onMounted(() => {
+  loadDashboard()
+})
 </script>
 
 <template>

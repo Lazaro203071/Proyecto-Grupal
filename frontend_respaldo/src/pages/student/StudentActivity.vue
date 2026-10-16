@@ -1,21 +1,70 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import StatusBadge from '../../components/ui/StatusBadge.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import { activityMock } from '../../mocks/rewards.js'
+import { api } from '../../services/api.js'
 
 const filter = ref('all')
-const filtered = ref(activityMock)
+const allActivity = ref([...activityMock])
+const balanceData = ref({
+  balance: 1250,
+  lifetimeEarned: 1250,
+  lifetimeRedeemed: 0,
+})
+const isLoading = ref(true)
+
+const filtered = computed(() => {
+  if (filter.value === 'all') return allActivity.value
+  return allActivity.value.filter(a => a.type === filter.value)
+})
 
 function applyFilter(type) {
   filter.value = type
-  if (type === 'all') filtered.value = activityMock
-  else filtered.value = activityMock.filter(a => a.type === type)
 }
 
 function formatPoints(pts) {
   return (pts > 0 ? '+' : '') + pts.toLocaleString()
 }
+
+async function loadActivity() {
+  try {
+    isLoading.value = true
+    const [balanceRes, historyRes] = await Promise.allSettled([
+      api.points.getMyBalance(),
+      api.points.getMyHistory(),
+    ])
+
+    if (balanceRes.status === 'fulfilled' && balanceRes.value) {
+      balanceData.value.balance = balanceRes.value.balance ?? balanceData.value.balance
+      balanceData.value.lifetimeEarned = balanceRes.value.lifetime_earned ?? balanceData.value.lifetimeEarned
+      balanceData.value.lifetimeRedeemed = balanceRes.value.lifetime_redeemed ?? balanceData.value.lifetimeRedeemed
+    }
+
+    if (historyRes.status === 'fulfilled' && historyRes.value) {
+      const list = Array.isArray(historyRes.value) ? historyRes.value : (historyRes.value.data || [])
+      if (list.length > 0) {
+        allActivity.value = list.map(item => ({
+          id: item._id || item.id,
+          date: item.created_at ? item.created_at.slice(0, 10) : 'Hoy',
+          concept: item.description || (item.type === 'earn' ? 'Puntos acumulados' : 'Canje de recompensa'),
+          source: item.source_domain || 'campus',
+          points: item.amount || 0,
+          type: item.type === 'earn' ? 'earn' : 'redeem',
+          status: 'Completado',
+        }))
+      }
+    }
+  } catch (err) {
+    console.warn('Usando actividad local de respaldo:', err)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadActivity()
+})
 </script>
 
 <template>
@@ -24,7 +73,7 @@ function formatPoints(pts) {
       <div>
         <h1 class="page-title">Mi actividad</h1>
         <div class="page-subtitle">Panel del alumno</div>
-        <p class="page-desc">Historial completo de tus movimientos de puntos.</p>
+        <p class="page-desc">Historial completo de tus movimientos de puntos y transacciones.</p>
       </div>
     </div>
 
@@ -32,17 +81,17 @@ function formatPoints(pts) {
     <div class="balance-strip card">
       <div class="bs-item">
         <div class="bs-label">Saldo actual</div>
-        <div class="bs-value blue">3,420 pts</div>
+        <div class="bs-value blue">{{ balanceData.balance.toLocaleString() }} pts</div>
       </div>
       <div class="bs-divider"></div>
       <div class="bs-item">
         <div class="bs-label">Total ganado</div>
-        <div class="bs-value green">+4,020 pts</div>
+        <div class="bs-value green">+{{ balanceData.lifetimeEarned.toLocaleString() }} pts</div>
       </div>
       <div class="bs-divider"></div>
       <div class="bs-item">
         <div class="bs-label">Total canjeado</div>
-        <div class="bs-value red">-600 pts</div>
+        <div class="bs-value red">-{{ balanceData.lifetimeRedeemed.toLocaleString() }} pts</div>
       </div>
     </div>
 
@@ -56,7 +105,7 @@ function formatPoints(pts) {
 
     <!-- Tabla -->
     <div class="card">
-      <EmptyState v-if="!filtered.length" title="Sin movimientos" message="No hay movimientos para el filtro seleccionado." icon="🔍" />
+      <EmptyState v-if="!isLoading && !filtered.length" title="Sin movimientos" message="No hay movimientos para el filtro seleccionado." icon="🔍" />
       <div v-else class="table-wrapper">
         <table class="cd-table">
           <thead>
@@ -69,9 +118,9 @@ function formatPoints(pts) {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in filtered" :key="item.date + item.concept">
+            <tr v-for="item in filtered" :key="item.id || (item.date + item.concept)">
               <td style="color:var(--cd-text-muted);font-size:12px;white-space:nowrap">{{ item.date }}</td>
-              <td>{{ item.concept }}</td>
+              <td style="font-weight:500">{{ item.concept }}</td>
               <td><span class="source-tag">{{ item.source }}</span></td>
               <td>
                 <span :class="item.points > 0 ? 'pts-pos' : 'pts-neg'">{{ formatPoints(item.points) }}</span>
@@ -110,6 +159,7 @@ function formatPoints(pts) {
 .source-tag {
   padding: 2px 8px; background: #f0f3f9; border-radius: 12px;
   font-size: 11px; color: var(--cd-text-secondary);
+  text-transform: uppercase;
 }
 .pts-pos { color: #16a34a; font-weight: 600; }
 .pts-neg { color: #dc2626; font-weight: 600; }

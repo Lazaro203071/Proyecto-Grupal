@@ -11,18 +11,23 @@ class RewardProgramMembership extends Model
 
     protected $fillable = [
         'business_id',
+        'business_name',
+        'category',
+        'contact_email',
         'status',
         'compensation_model',
         'accepted_terms_at',
         'joined_at',
         'deactivated_at',
         'deactivation_reason',
+        'metadata',
     ];
 
     protected $casts = [
         'accepted_terms_at' => 'datetime',
         'joined_at' => 'datetime',
         'deactivated_at' => 'datetime',
+        'metadata' => 'array',
     ];
 
     public function earningRules()

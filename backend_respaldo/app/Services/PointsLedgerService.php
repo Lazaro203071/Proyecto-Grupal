@@ -102,6 +102,8 @@ final class PointsLedgerService implements PointsLedgerServiceInterface
                 entityId: (string) $ledgerEntry->_id,
                 studentId: $request->studentId,
                 after: ['amount' => $points, 'business_id' => $request->businessId],
+                actorId: $request->actorId,
+                actorRole: $request->actorRole,
                 sourceDomain: $request->sourceDomain,
                 correlationId: $correlationId,
             );
@@ -158,6 +160,8 @@ final class PointsLedgerService implements PointsLedgerServiceInterface
                 entityId: (string) $ledgerEntry->_id,
                 studentId: $request->studentId,
                 after: ['amount' => -$request->pointsRequired, 'redemption_id' => $request->redemptionId],
+                actorId: $request->actorId,
+                actorRole: $request->actorRole,
                 sourceDomain: 'rewards',
                 correlationId: $correlationId,
             );
@@ -220,17 +224,15 @@ final class PointsLedgerService implements PointsLedgerServiceInterface
                 if ($shortfall > 0) {
                     $account->increment('pending_balance', $shortfall);
 
+                    $severity = $shortfall >= 1000 ? FraudFlag::SEVERITY_HIGH : FraudFlag::SEVERITY_MEDIUM;
+
                     $fraudFlag = FraudFlag::create([
                         'student_id' => $studentId,
                         'business_id' => $original->business_id,
                         'reason' => 'points_reversal_shortfall',
-                        'severity' => 'medium', // TODO: definir escala de severidad con Gobierno de Puntos (módulo 6)
+                        'severity' => $severity,
                         'related_ledger_id' => (string) $ledgerEntry->_id,
-                        'status' => 'open',
-                        // El modelo no tiene un campo numérico para el monto: FraudFlag no trae
-                        // "amount" en su $fillable, así que el shortfall solo queda legible en texto.
-                        // Si Gobierno de Puntos necesita reportarlo/filtrarlo de forma estructurada,
-                        // hay que agregar esa columna al modelo/migración.
+                        'status' => FraudFlag::STATUS_OPEN,
                         'notes' => "Reverso de {$original->_id} no se pudo cubrir completo: "
                             . "faltaron {$shortfall} pts (ya habían sido canjeados).",
                     ]);
@@ -260,6 +262,8 @@ final class PointsLedgerService implements PointsLedgerServiceInterface
                 studentId: $studentId,
                 before: ['original_ledger_id' => (string) $original->_id, 'original_amount' => $original->amount],
                 after: ['reversal_amount' => $reversalAmount, 'shortfall' => $shortfall],
+                actorId: $request->actorId,
+                actorRole: $request->actorRole,
                 sourceDomain: $original->source_domain,
                 reason: $request->reason,
                 correlationId: $correlationId,
@@ -433,15 +437,19 @@ final class PointsLedgerService implements PointsLedgerServiceInterface
         ?string $reason = null,
         ?string $correlationId = null,
     ): void {
+        $user = request()?->user();
+        $realActorId = $actorId ?? ($user ? (string) $user->getAuthIdentifier() : $studentId);
+        $realActorRole = $actorRole ?? ($user ? (string) $user->role : 'system');
+
         AuditLog::create([
-            'actor_id' => $actorId ?? $studentId, // TODO: reemplazar por el actor real (agente/admin) cuando el caller lo tenga
-            'actor_role' => $actorRole, // TODO: 'student'|'agent'|'admin'|'system' — pasar desde el controller/job
+            'actor_id' => $realActorId,
+            'actor_role' => $realActorRole,
             'action' => $action,
             'entity_type' => $entityType,
             'entity_id' => $entityId,
             'before' => $before,
             'after' => $after,
-            'ip_address' => request()?->ip(), // null fuera de contexto HTTP (jobs, consola, webhooks)
+            'ip_address' => request()?->ip(),
             'device' => request()?->userAgent(),
             'correlation_id' => $correlationId,
             'source_domain' => $sourceDomain,

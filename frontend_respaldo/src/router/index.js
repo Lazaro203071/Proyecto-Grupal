@@ -56,6 +56,10 @@ const routes = [
     component: () => import('../pages/admin/AdminDashboard.vue'),
   },
   {
+    path: '/recompensas/admin/ledger',
+    component: () => import('../pages/admin/AdminLedger.vue'),
+  },
+  {
     path: '/recompensas/admin/negocios',
     component: () => import('../pages/admin/AdminBusinesses.vue'),
   },

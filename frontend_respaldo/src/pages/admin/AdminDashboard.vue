@@ -1,14 +1,16 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import StatCard from '../../components/ui/StatCard.vue'
 import { adminDashboardMock } from '../../mocks/rewards.js'
+import { api } from '../../services/api.js'
 
 const router = useRouter()
-const data = adminDashboardMock
+const data = ref({ ...adminDashboardMock })
+const isLoading = ref(true)
 
 // Gráfico de barras simple — sin librería externa
-const maxVal = Math.max(...data.chartData.issued)
+const maxVal = Math.max(...data.value.chartData.issued)
 function barH(v) { return Math.round((v / maxVal) * 100) }
 function fmt(n) {
   if (n >= 1000000) return (n/1000000).toFixed(1)+'M'
@@ -22,8 +24,26 @@ function avatarBg(user) {
   return avatarColorMap[initials] || '#2878ED'
 }
 
+async function loadDashboard() {
+  try {
+    isLoading.value = true
+    const stats = await api.dashboard.getStats()
+    if (stats) {
+      data.value.pointsIssuedMonth = stats.points_issued_month ?? data.value.pointsIssuedMonth
+      data.value.completedRedemptions = stats.completed_redemptions ?? data.value.completedRedemptions
+      data.value.fraudAlerts = stats.fraud_alerts ?? data.value.fraudAlerts
+      data.value.adheredBusinesses = stats.adhered_businesses ?? data.value.adheredBusinesses
+    }
+  } catch (err) {
+    console.warn('Usando métricas locales de admin:', err)
+  } finally {
+    isLoading.value = false
+  }
+}
 
-
+onMounted(() => {
+  loadDashboard()
+})
 </script>
 
 <template>

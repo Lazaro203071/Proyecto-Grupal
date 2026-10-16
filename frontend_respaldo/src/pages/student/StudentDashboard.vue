@@ -1,12 +1,49 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import StatCard from '../../components/ui/StatCard.vue'
 import StatusBadge from '../../components/ui/StatusBadge.vue'
 import { studentDashboardMock } from '../../mocks/rewards.js'
+import { api } from '../../services/api.js'
 
 const router = useRouter()
-const data = studentDashboardMock
+const data = ref({ ...studentDashboardMock })
+const isLoading = ref(true)
+
+async function loadDashboard() {
+  try {
+    isLoading.value = true
+    const stats = await api.dashboard.getStats()
+    if (stats) {
+      data.value.balance = stats.balance ?? data.value.balance
+      data.value.activeRedemptions = stats.active_redemptions ?? data.value.activeRedemptions
+      data.value.availableCampaigns = stats.available_campaigns ?? data.value.availableCampaigns
+      if (stats.featured_campaign) {
+        data.value.featuredCampaign = {
+          title: stats.featured_campaign.name || data.value.featuredCampaign.title,
+          description: stats.featured_campaign.description || data.value.featuredCampaign.description,
+          period: stats.featured_campaign.start_date ? `${stats.featured_campaign.start_date.slice(0, 10)} al ${stats.featured_campaign.end_date?.slice(0, 10) || 'permanente'}` : data.value.featuredCampaign.period,
+        }
+      }
+      if (stats.recent_activity && stats.recent_activity.length) {
+        data.value.recentActivity = stats.recent_activity.map(a => ({
+          date: (a.created_at || '').slice(0, 10),
+          concept: a.description || a.source_domain || 'Movimiento de puntos',
+          points: a.amount || 0,
+          status: a.amount > 0 ? 'Completado' : 'Canjeado',
+        }))
+      }
+    }
+  } catch (err) {
+    console.warn('Usando datos de respaldo para el dashboard del estudiante:', err)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadDashboard()
+})
 </script>
 
 <template>
