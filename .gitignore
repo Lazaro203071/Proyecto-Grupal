@@ -2,3 +2,8 @@
 node_modules/
 vendor/
 .env
+
+dist/
+*.log
+backend_respaldo/public/hot
+backend_respaldo/public/fonts-manifest.dev.json
