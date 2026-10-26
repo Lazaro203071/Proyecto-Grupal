@@ -34,6 +34,11 @@ Route::prefix('v1')->group(function () {
     Route::get('/rewards', [RewardController::class, 'index']);
     Route::get('/rewards/{id}', [RewardController::class, 'show']);
 
+    // ── Ingesta de eventos inter-equipos (Equipo 3 Marketplace, Equipo 4 Inventarios) ──
+    // Autenticación dual: Firma HMAC (X-Team-Signature / X-Campus-Signature) o Token Bearer Sanctum
+    Route::post('/integrations/ingest-event', [IntegrationController::class, 'ingestEvent'])
+        ->middleware('integration.auth');
+
     // ── Rutas protegidas (Sanctum Token) ───────────────────────
     Route::middleware('auth:sanctum')->group(function () {
 
@@ -134,7 +139,6 @@ Route::prefix('v1')->group(function () {
             Route::get('/logs', [IntegrationController::class, 'logs'])->middleware('permission:integrations.view');
             Route::get('/webhooks', [IntegrationController::class, 'webhooks'])->middleware('permission:integrations.view');
             Route::post('/webhooks/{id}/retry', [IntegrationController::class, 'retryWebhook'])->middleware('permission:integrations.retry');
-            Route::post('/ingest-event', [IntegrationController::class, 'ingestEvent'])->middleware('permission:integrations.ingest');
         });
 
         // ── Administración general y configuraciones (7.7 & 7.11) ─

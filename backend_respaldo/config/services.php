@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    // Integración Equipo 4 — Inventarios, Almacenes y Abastecimiento
+    'team4' => [
+        'base_url'      => env('TEAM4_BASE_URL', 'http://localhost:8004'),
+        'shared_secret' => env('TEAM4_SERVICE_SECRET', 'secreto_equipo4_eq3_2026'),
+        'business_id'   => env('TEAM4_BUSINESS_ID', 'BUS-CD-SOUV-001'),
+        'timeout'       => (int) env('TEAM4_TIMEOUT', 5),
+        'driver'        => env('INVENTORY_DRIVER', 'team4'), // 'team4' o 'none'
+    ],
+
 ];
