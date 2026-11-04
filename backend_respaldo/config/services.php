@@ -35,6 +35,14 @@ return [
         ],
     ],
 
+    // Integración Equipo 1 — Identidad, Acceso, NFC/QR y Perfil del Estudiante
+    'team1' => [
+        'base_url'      => env('TEAM1_BASE_URL', 'http://localhost:8001'),
+        'shared_secret' => env('TEAM1_SERVICE_SECRET', 'secreto_equipo1_eq7_2026'),
+        'service_token' => env('TEAM1_SERVICE_TOKEN', env('TEAM1_SERVICE_SECRET', 'secreto_equipo1_eq7_2026')),
+        'timeout'       => (int) env('TEAM1_TIMEOUT', 5),
+    ],
+
     // Integración Equipo 4 — Inventarios, Almacenes y Abastecimiento
     'team4' => [
         'base_url'      => env('TEAM4_BASE_URL', 'http://localhost:8004'),

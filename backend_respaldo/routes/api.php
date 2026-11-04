@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\PointsController;
 use App\Http\Controllers\Api\RedemptionController;
 use App\Http\Controllers\Api\RewardController;
 use App\Http\Controllers\Api\SettingsController;
+use App\Http\Controllers\Api\PlatformIngestController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -34,9 +35,14 @@ Route::prefix('v1')->group(function () {
     Route::get('/rewards', [RewardController::class, 'index']);
     Route::get('/rewards/{id}', [RewardController::class, 'show']);
 
-    // ── Ingesta de eventos inter-equipos (Equipo 3 Marketplace, Equipo 4 Inventarios) ──
-    // Autenticación dual: Firma HMAC (X-Team-Signature / X-Campus-Signature) o Token Bearer Sanctum
+    // ── Ingesta de eventos inter-equipos (Equipo 1 Identidad, Equipo 3 Marketplace, Equipo 4 Inventarios) ──
+    // Autenticación múltiple: Token Bearer de servicio (EVENTS_SINK_TOKEN), Firma HMAC o Token Bearer Sanctum
     Route::post('/integrations/ingest-event', [IntegrationController::class, 'ingestEvent'])
+        ->middleware('integration.auth');
+    // Alias para compatibilidad directa con la especificación de Equipo 1 (docs/integration/TEAM-7.md)
+    Route::post('/integration/events', [IntegrationController::class, 'ingestEvent'])
+        ->middleware('integration.auth');
+    Route::post('/integrations/events', [IntegrationController::class, 'ingestEvent'])
         ->middleware('integration.auth');
 
     // ── Rutas protegidas (Sanctum Token) ───────────────────────
@@ -154,5 +160,11 @@ Route::prefix('v1')->group(function () {
             Route::get('/', [SettingsController::class, 'catalogs']);
             Route::post('/', [SettingsController::class, 'storeCatalog'])->middleware('permission:catalogs.manage');
         });
+
+        Route::prefix('plataforma')->middleware('throttle:300,1')->group(function () {
+            Route::post('/eventos', [PlatformIngestController::class, 'storeEvent'])->middleware('permission:analytics.events.write');
+            Route::post('/auditoria', [PlatformIngestController::class, 'storeAudit'])->middleware('permission:audit.write');
+        });
+
     });
 });
