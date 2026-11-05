@@ -1,0 +1,496 @@
+================================================================================
+CONTEXTO TÉCNICO DEL PROYECTO — CAMPUS DIGITAL: RECOMPENSAS Y PUNTOS (EQUIPO 7)
+Documento para dar contexto a otra IA. Generado el 2026-10-21 tras revisar el
+código fuente real (no solo la documentación).
+================================================================================
+
+IMPORTANTE PARA LA IA QUE LEA ESTO
+- Todo lo de aquí fue verificado contra el código. Donde README.md o
+  DOCUMENTO_PRESENTACION_EQUIPO7.* dicen algo distinto, MANDA EL CÓDIGO. Ver la
+  sección 10 ("Discrepancias documentación vs código").
+- Idioma del proyecto: español (comentarios, mensajes de error, UI).
+- Materia: Ingeniería de Software, 7mo semestre. Proyecto grupal: varios equipos
+  construyen módulos de "Campus Digital" que deben integrarse entre sí. Nosotros
+  somos el EQUIPO 7 (programa de puntos, recompensas y lealtad).
+
+
+--------------------------------------------------------------------------------
+1. ESTRUCTURA DEL REPOSITORIO
+--------------------------------------------------------------------------------
+Raíz: .../Ingeniería de Software/Api   (repo git: Lazaro203071/Proyecto-Grupal)
+
+  backend_respaldo/          <- BACKEND REAL (Laravel 13). Pese al nombre, es el activo.
+  frontend_respaldo/         <- FRONTEND REAL (Vue 3 + Vite). Pese al nombre, es el activo.
+  docker/                    <- Infra: php/Dockerfile, php/entrypoint.sh, php/php.ini,
+                                nginx/default.conf, mongodb/init-replica-set.js
+  docker-compose.yml         <- Compose ACTIVO (usa *_respaldo y docker/)
+  docker-compose-respaldo.yml<- Compose viejo, solo referencia (apunta a ./backend que no existe)
+  .env / .env.example        <- Variables de docker compose (puertos, credenciales Mongo)
+  README.md                  <- Documentación principal (tiene inexactitudes, ver sección 10)
+  DOCUMENTO_PRESENTACION_EQUIPO7.(txt|md|docx) <- Documento para la presentación
+  Proyecto_Grupal/           <- Casi vacío: README que remite al principal y 2 componentes
+                                sueltos (frontend/src/components/ui/ConfirmModal.vue y
+                                StatusBadge.vue). NO es ejecutable.
+
+Historial git: solo 2 commits ("Primer commit del proyecto", "Modificaciones").
+
+
+--------------------------------------------------------------------------------
+2. STACK E INFRAESTRUCTURA
+--------------------------------------------------------------------------------
+Backend:  PHP 8.3-FPM, Laravel ^13.17, mongodb/laravel-mongodb ^5.11 (ext-mongodb 2.x),
+          Laravel Sanctum (tokens Bearer guardados en Mongo), laravel/tinker.
+          Dev: phpunit ^12.5, mockery, faker, pint, pail, collision.
+BD:       MongoDB 7 en modo Replica Set "rs0" (un nodo) con keyfile, para permitir
+          transacciones multi-documento (DB::transaction). Base: campus_digital.
+Frontend: Vue ^3.5 (Composition API, <script setup>), vue-router ^4.6, Vite ^8.3.
+          CSS propio (src/style.css). NO hay Tailwind ni Heroicons (README miente).
+          No hay Pinia/Vuex; estado global con composables (useRole, useToast).
+          No hay axios: fetch nativo en src/services/api.js.
+
+docker-compose.yml (nombre del proyecto: campus_digital), servicios:
+  - mongodb     mongo:7, replSet rs0 + keyfile autogenerado en volumen; puerto host
+                127.0.0.1:${MONGO_PORT:-27017}  (el .env.example de la raíz pone 27018)
+  - mongo-init  one-shot, ejecuta docker/mongodb/init-replica-set.js (idempotente)
+  - app         build docker/php (php:8.3-fpm + pecl mongodb + composer). Monta
+                ./backend_respaldo en /var/www. Entrypoint: crea dirs de storage, copia
+                .env si falta, composer install si falta vendor, key:generate si falta,
+                php artisan migrate --force si RUN_MIGRATIONS=true. NO corre seeders.
+  - webserver   nginx:stable-alpine, puerto ${API_PORT:-8000}:80 -> fastcgi app:9000
+  - frontend    node:20, monta ./frontend_respaldo, npm install && npm run dev --host,
+                puerto ${FRONTEND_PORT:-5173}. VITE_API_PROXY_TARGET=http://webserver:80
+
+URLs: Frontend http://localhost:5173 | API http://localhost:8000/api/v1 | Health /up
+Vite proxy: /api -> VITE_API_PROXY_TARGET o http://localhost:8000.
+CORS (config/cors.php): paths api/*, origen = FRONTEND_URL (http://localhost:5173).
+
+Backend .env relevante: APP_ENV=local, APP_DEBUG=true, DB_CONNECTION=mongodb,
+MONGO_DB_DATABASE=campus_digital, SESSION_DRIVER=file, QUEUE_CONNECTION=sync,
+CACHE_STORE=file, SANCTUM_TOKEN_EXPIRATION=480 (minutos), APP_LOCALE=es.
+
+Cómo levantar:
+  docker compose up -d --build
+  docker compose exec app php artisan db:seed      (seeders NO son automáticos)
+  docker compose exec app php artisan test
+Sin Docker: frontend con `npm run dev` en frontend_respaldo (funciona con mocks si
+no hay backend). El backend necesita MongoDB replica set sí o sí.
+
+
+--------------------------------------------------------------------------------
+3. ROLES, PERMISOS Y AUTENTICACIÓN
+--------------------------------------------------------------------------------
+Roles (App\Models\User::ROLES): student, professor, admin, platform_admin, auditor, system.
+Matriz en config/permissions.php (el servidor siempre valida; el front solo oculta UI):
+  student:   points.view_own, rewards.view, campaigns.view, redemptions.view_own,
+             redemptions.create, redemptions.cancel_own
+  professor: rewards.view, campaigns.view, campaigns.propose_academic,
+             redemptions.view_all, redemptions.validate, redemptions.deliver,
+             analytics.view_academic, audit.view_own
+  auditor:   solo lectura (points.view_any, businesses.view, rules.view, governance.view,
+             fraud.view, audit.view, analytics.view, integrations.view, catalogs.view,
+             settings.view, ...)
+  admin:     auditor + points.earn/reverse/reconcile/adjust, businesses.manage,
+             rules.manage, campaigns.manage, rewards.manage, redemptions.validate/
+             deliver/manage, governance.manage, fraud.review, catalogs.manage,
+             settings.update, integrations.retry
+  platform_admin: admin + settings.manage_sensitive, settings.approve, users.view/manage
+  system:    points.earn, points.reverse, integrations.ingest  (cuenta de servicio
+             para integraciones de otros equipos)
+home_area: student->student, professor->professor, admin/platform_admin/auditor->admin.
+
+Middleware: EnsureUserHasPermission (alias `permission:x`), EnsureUserHasRole (`role:x`).
+App\Support\Permissions::homeArea(). AppServiceProvider registra Gate::before.
+Sanctum adaptado a Mongo: App\Models\PersonalAccessToken.
+
+Usuarios demo (database/seeders/UserSeeder.php), contraseña "Campus2026!"
+(o env DEMO_USER_PASSWORD):
+  alumno@campus.edu (student, ALU-2026-0842), profesor@campus.edu (professor),
+  admin@campus.edu (admin), platform.admin@campus.edu (platform_admin),
+  auditor@campus.edu (auditor), system.marketplace@campus.edu (system).
+Comando extra: app/Console/Commands/CreateAdminCommand.php (crear admin por CLI).
+
+Auth endpoints: POST /auth/login (email+password -> token, user con permissions y,
+si es alumno, resumen de puntos; home_area), POST /auth/logout, GET /auth/me,
+POST /auth/switch-demo-user {role} -> PÚBLICO (sin token) y solo funciona con
+APP_ENV local/testing: emite token del primer usuario con ese rol.
+
+
+--------------------------------------------------------------------------------
+4. MODELO DE DATOS (MongoDB, 11 migraciones en database/migrations/2026_09_11_*)
+--------------------------------------------------------------------------------
+Todos los modelos extienden MongoDB\Laravel\Eloquent\Model (conexión 'mongodb').
+
+users                 name, email, password, role, status, student_code, department,
+                      business_id. Métodos: isActive, hasRole, permissions,
+                      hasPermission, toPublicArray.
+personal_access_tokens  Sanctum.
+points_accounts       student_id, balance, pending_balance, lifetime_earned,
+                      lifetime_redeemed, last_ledger_entry_id. reconcileFromLedger()
+                      (solo calcula). Es una CACHÉ; la verdad es el ledger.
+points_ledger         APPEND-ONLY. student_id, idempotency_key, type, amount (con signo),
+                      source_domain, source_reference, related_ledger_id, rule_id,
+                      business_id, description, metadata.
+                      type REALES usados en código: 'earn' (+), 'redeem' (-),
+                      'reverse' (signo opuesto al original), 'adjust' (+/-, gobierno).
+                      'expired' NO existe en el código.
+reward_program_memberships  (= "negocios"/comercios afiliados) business_id, business_name,
+                      category, contact_email, status, compensation_model,
+                      accepted_terms_at, joined_at, deactivated_at, deactivation_reason,
+                      metadata. hasMany earningRules, rewards.
+earning_rules         business_id, name, type (amount_spent|fixed|event), points_per_unit,
+                      unit_amount, fixed_points, multiplier, excluded_products,
+                      max_points_per_operation, daily_cap, active_from, active_to,
+                      status. isActiveOn(date).
+point_campaigns       name, description, type, sponsor_type, sponsor_id, multiplier,
+                      starts_at, ends_at, status, scope ('global'|'business'), scope_ids.
+rewards               business_id, name, description, points_required, stock,
+                      reserved_stock, linked_product_reference, is_physical, valid_from,
+                      valid_to, limit_per_user, limit_period_days, status, images.
+                      availableStock() = max(0, stock - reserved_stock). hasMany items.
+reward_items          reward_id, variant_name, sku_reference, stock, reserved_stock.
+                      (Variantes; casi no se usan en la lógica.)
+redemptions           student_id, reward_id, reward_item_id, points_spent, status,
+                      redemption_code, ledger_entry_id, stock_reservation_reference,
+                      requested_at, delivered_at, cancelled_at, cancellation_reason.
+                      TRANSITIONS: requested->[reserved,cancelled];
+                      reserved->[stock_pending,confirmed,cancelled];
+                      stock_pending->[confirmed,cancelled]; confirmed->[delivered,cancelled];
+                      delivered->[reversed]; cancelled/reversed finales.
+                      (canTransitionTo existe pero el controller no lo usa.)
+redemption_events     redemption_id, from_status, to_status, actor_id, actor_role, note,
+                      metadata (línea de tiempo del canje).
+points_policies       name, type, expiration_days, expiration_batch_strategy,
+                      daily_cap_points, max_redemptions_per_day,
+                      reversal_grace_period_days, status, config.
+fraud_flags           student_id, business_id, reason, severity (low|medium|high|critical),
+                      related_ledger_id, related_redemption_id, status
+                      (open|under_review|resolved|dismissed), reviewed_by, reviewed_at, notes.
+settings              key, value, type, description, is_sensitive.
+catalogs              name, code, items, description.
+configuration_versions config_key, version, value, status, created_by, approved_by, ...
+                      TRANSITIONS draft->pending_approval->approved|rejected,
+                      approved->active, active->superseded.
+audit_logs            actor_id, actor_role, action, entity_type, entity_id, before, after,
+                      ip_address, device, correlation_id, source_domain, reason.
+audit_correlations    correlation_id, origin_domain, description, related_entities.
+integration_logs      domain, direction (inbound/outbound), endpoint, status, attempt,
+                      request_payload, response_payload, error_message, correlation_id.
+webhook_events        source, event_id, event_type, payload, status, retry_count,
+                      next_retry_at, processed_at.
+analytics_events      source_domain, event_type, entity_type, entity_id, payload,
+                      idempotency_key, processed, processed_at, processing_error.
+
+Seeders (DatabaseSeeder): UserSeeder, BusinessSeeder (biz-cafeteria-central,
+biz-libreria, biz-souvenirs, biz-papeleria, biz-innovacion-hub), EarningRuleSeeder,
+CampaignSeeder, RewardSeeder (Mochila 450pts/30, Termo 220/50, Boleto 50% cafetería
+120/200 digital, Hoodie 600/25, Cuaderno 180/60, Bono impresiones 80/300 digital;
+NINGUNO tiene linked_product_reference), PointsAndRedemptionsSeeder.
+
+
+--------------------------------------------------------------------------------
+5. LÓGICA DE NEGOCIO CENTRAL: PointsLedgerService
+--------------------------------------------------------------------------------
+Archivos: app/Services/PointsLedgerService.php (+ Interface), DTOs en
+app/Services/PointsLedger/DTO (EarnPointsRequest, RedeemPointsRequest,
+ReversePointsRequest), excepciones (DailyCapExceeded, InsufficientPoints,
+LedgerEntryNotFound, NoActiveEarningRule), Result/LedgerOperationResult
+(ledgerEntry, account, wasIdempotentReplay, shortfallAmount).
+
+earn(): idempotencia por idempotency_key (si existe, devuelve replay) -> busca regla
+  activa del business_id (si no hay: NoActiveEarningRuleException) -> puntos base
+  (fixed_points o floor(sale/unit_amount*points_per_unit)) -> * multiplier de la regla
+  -> * multiplier de campaña aplicable (por id o la primera activa global/por negocio)
+  -> tope max_points_per_operation -> tope daily_cap (recorta; si ya está agotado lanza
+  DailyCapExceededException) -> en DB::transaction: crea ledger 'earn', incrementa
+  balance y lifetime_earned, crea AuditCorrelation y AuditLog.
+redeem(): idempotencia -> saldo disponible = SUMA del ledger (no la caché) -> si no
+  alcanza InsufficientPointsException -> transaction: ledger 'redeem' (amount negativo),
+  decrementa balance, incrementa lifetime_redeemed, auditoría.
+reverse(related_ledger_id): idempotencia -> crea ledger 'reverse' con signo opuesto.
+  Si revierte un earn y el alumno ya gastó los puntos: retira lo disponible, el
+  faltante va a pending_balance y se crea FraudFlag 'points_reversal_shortfall'
+  (high si faltante >= 1000, si no medium). Si revierte un redeem: devuelve puntos.
+reconcileAccount(): recalcula balance desde el ledger y lo guarda.
+getAvailableBalance(): sum(amount) del ledger del alumno.
+logAudit toma actor/IP/user-agent del request() si no se le pasan.
+
+
+--------------------------------------------------------------------------------
+6. API REST (routes/api.php, todo bajo /api/v1)
+--------------------------------------------------------------------------------
+Públicas:
+  POST /auth/login | POST /auth/switch-demo-user | GET /rewards | GET /rewards/{id}
+Con auth:sanctum (+ permiso indicado):
+  Auth:        POST /auth/logout, GET /auth/me
+  Dashboard:   GET /dashboard/stats (respuesta distinta según rol)
+  Puntos:      GET /points/my-balance, GET /points/my-history,
+               GET /points/balance/{studentId}, GET /points/history/{studentId}
+               (alumno solo puede ver lo suyo), GET /points/ledger [points.view_any],
+               POST /points/earn [points.earn], POST /points/redeem,
+               POST /points/reverse [points.reverse],
+               POST /points/reconcile/{studentId} [points.reconcile]
+  Recompensas: POST /rewards, PUT /rewards/{id}, DELETE /rewards/{id} [rewards.manage]
+  Canjes:      GET /redemptions (alumno: solo los suyos; filtros status, code, student_id)
+               POST /redemptions [redemptions.create]  body: reward_id, reward_item_id?,
+                    idempotency_key?, student_id? (solo admin en nombre de alumno)
+               POST /redemptions/validate-code {code} [redemptions.validate]
+               GET /redemptions/{id}
+               POST /redemptions/{id}/deliver [redemptions.deliver]
+               POST /redemptions/{id}/cancel {reason} (alumno solo los suyos)
+               GET /redemptions/{id}/events
+  Negocios:    GET /businesses, GET /businesses/{id}, POST, PUT /{id},
+               POST /{id}/toggle-status [businesses.manage]
+  Reglas:      GET /rules, GET /rules/{id}, POST, PUT /{id}, POST /{id}/toggle-status
+               [rules.manage]
+  Campañas:    GET /campaigns (filtrado por rol), GET /campaigns/{id},
+               POST [campaigns.manage], POST /campaigns/propose
+               [campaigns.propose_academic] (queda en 'draft'), PUT /{id},
+               POST /{id}/toggle-status
+  Gobierno:    GET /governance/policies, POST/PUT policies [governance.manage],
+               GET /governance/fraud-flags(/{id}) [fraud.view],
+               POST /governance/fraud-flags/{id}/review {status, notes} [fraud.review],
+               POST /governance/manual-adjustment {student_id, amount!=0, reason,
+               idempotency_key?} [points.adjust] -> ledger 'adjust' (no usa el servicio,
+               escribe directo con su propia transacción y auditoría)
+  Auditoría:   GET /audit/logs, GET /audit/logs/{id}, GET /audit/correlations/{id}
+  Analítica:   GET /analytics/overview [analytics.view],
+               GET /analytics/professor [analytics.view_academic]
+  Integración: GET /integrations/logs, GET /integrations/webhooks [integrations.view],
+               POST /integrations/webhooks/{id}/retry [integrations.retry],
+               POST /integrations/ingest-event [integrations.ingest]
+  Settings:    GET /settings, PUT /settings/{key} {value} [settings.update],
+               GET /settings/versions, POST /settings/versions [settings.update],
+               POST /settings/versions/{id}/transition {target_status} [settings.approve]
+  Catálogos:   GET /catalogs, POST /catalogs [catalogs.manage]
+
+Formato de error típico: {"success": false, "error": "mensaje"} con 403/404/422.
+Paginación: paginate() de Laravel (data, current_page, ...), per_page máx 100.
+
+
+--------------------------------------------------------------------------------
+7. FLUJO DE CANJE ACTUAL (RedemptionController) — clave para integraciones
+--------------------------------------------------------------------------------
+store():
+  1. Recompensa debe estar 'active'; si stock != null y availableStock() <= 0 -> 422.
+  2. Saldo del ledger >= points_required, si no 422.
+  3. Código: 'CJ-XXXX-XXXX' (Str::random, mayúsculas).
+  4. ledger->redeem(...) DESCUENTA LOS PUNTOS EN ESTE MOMENTO (al solicitar).
+     Nota: se pasa redemptionId = idempotencyKey (no el _id del canje).
+  5. $reward->increment('reserved_stock', 1)   (reserva LOCAL, no hay inventario externo)
+  6. Redemption::create con status 'confirmed' y
+     stock_reservation_reference = UUID aleatorio (placeholder, no viene de nadie).
+  7. RedemptionEvent (requested->confirmed) + AuditLog 'redemption.created'.
+  Los pasos 4-7 NO están en una sola transacción.
+validateCode(): busca por código, devuelve canje, datos del alumno y can_deliver
+  (status en confirmed|reserved|stock_pending).
+deliver(): en transacción: status 'delivered', delivered_at, reserved_stock -1, stock -1,
+  evento + auditoría. Lo hace staff (profesor/admin), no el alumno.
+cancel(): no permitido si cancelled|reversed|delivered. Revierte el ledger del canje
+  (devuelve puntos) con idempotency_key aleatoria, reserved_stock -1, status
+  'cancelled', evento + auditoría.
+No existe expiración automática de canjes ni scheduler (routes/console.php solo tiene
+'inspire'). No hay app/Jobs, app/Events ni app/Listeners.
+No se aplica limit_per_user / limit_period_days de la recompensa.
+
+
+--------------------------------------------------------------------------------
+8. INTEGRACIONES CON OTROS EQUIPOS
+--------------------------------------------------------------------------------
+8.1 Entrante (implementado): POST /api/v1/integrations/ingest-event
+  Requiere token Sanctum de un usuario con integrations.ingest (rol system, p.ej.
+  system.marketplace@campus.edu). NO verifica firma HMAC (pese a lo que dice el README).
+  Body REAL validado:
+    event_type (order.completed | service.purchased | sale.confirmed), source_domain,
+    student_id, business_id, sale_amount (>=0), order_reference, idempotency_key,
+    campaign_id?, metadata?
+  Idempotencia vía analytics_events.idempotency_key + ledger. Llama ledger->earn(),
+  registra IntegrationLog. Respuesta 201 {success, message, points_earned, new_balance};
+  replay 200 {replayed: true}; error 422.
+  NO existe evento de devolución/reembolso entrante.
+  retryWebhook() solo marca el webhook como 'processed' sin reprocesar nada.
+
+8.2 Salientes: NO EXISTE NINGÚN CLIENTE HTTP hacia otros equipos (no se usa Http::
+  en ningún lado, config/services.php no tiene entradas propias).
+
+8.3 PETICIÓN PENDIENTE DEL EQUIPO 4 (Inventario) — aún NO implementada
+  Base URL dev: http://localhost:8004, base path /api/v1/inventory
+  Variables propuestas: TEAM4_BASE_URL=http://localhost:8004,
+    TEAM4_SERVICE_SECRET=secreto_equipo4_eq3_2026 (sospechoso: dice "eq3"; confirmar)
+    (dicen src/.env, pero en nuestro proyecto va en backend_respaldo/.env)
+  Firma HMAC obligatoria:
+    payload = "{timestamp}|{method}|{path}|{sha256(body)}"
+    signature = hash_hmac('sha256', payload, TEAM4_SERVICE_SECRET)
+  Endpoints:
+    POST /reservations {origin_reference: redemption_code, origin_type:"REWARD",
+         product_reference: linked_product_reference, variant_sku, location_id,
+         quantity, idempotency_key:"e7-reserve-{redemption_code}", expires_at}
+         -> 201 {reservation_id, status:"reserved"} | 409 {error:"insufficient_stock"}
+         Guardar reservation_id en Redemption.stock_reservation_reference.
+         Si no hay stock, no debitar puntos.
+    POST /reservations/{id}/confirm {delivered_by, delivered_at,
+         idempotency_key:"e7-confirm-{reservation_id}"} -> 200 {status:"consumed",
+         stock_movement_id}
+    POST /reservations/{id}/release {reason:"CANCELLED",
+         idempotency_key:"e7-release-{reservation_id}"}
+    GET  /availability?product_reference=...&quantity=1 -> {available_quantity, warehouse_id}
+  Expiración: Eq.4 libera cada 5 min y publica en su integration_outbox el topic
+    "inventory.reservation.expired" {reservation_id, origin_reference, expired_at};
+    nosotros debemos devolver puntos (webhook o polling, por definir).
+  Puntos a aclarar con Eq.4 / decisiones abiertas:
+    - Contradicción: dicen "debitar puntos al entregar" pero también "devolver puntos
+      al expirar". Hoy debitamos al solicitar. Propuesta: reservar stock -> si 201,
+      debitar; confirmar al entregar; release + reverse al cancelar/expirar.
+    - Dicen RewardItem.linked_product_reference, pero ese campo está en Reward;
+      RewardItem tiene sku_reference (encaja con variant_sku).
+    - HMAC: faltan nombres de headers, formato de timestamp, tolerancia, si path
+      incluye query string, cómo se firma body vacío.
+    - Faltan códigos 401/404/422 y política ante timeout/caída de su API.
+    - Quién define expires_at; recompensas digitales (sin linked_product_reference)
+      no deberían pasar por inventario.
+    - Polling a su integration_outbox requeriría un endpoint de ellos (no tenemos
+      acceso a su BD). Preferencia sugerida: webhook hacia nosotros con HMAC
+      (requiere ruta nueva sin Sanctum que valide firma).
+    - Entrega la confirma staff (profesor/admin con redemptions.deliver).
+
+8.4 Contrato documentado para Equipo 3 (Marketplace) en README: usa otro formato
+  (event_id, marketplace.purchase_completed / marketplace.refund_issued,
+  X-Campus-Signature). NO coincide con el código (ver 8.1 y sección 10).
+
+
+--------------------------------------------------------------------------------
+9. FRONTEND (frontend_respaldo/src)
+--------------------------------------------------------------------------------
+main.js: createApp(App).use(router). App.vue llama initAuth() y envuelve en AppLayout.
+Layout: components/layout/AppLayout.vue, AppSidebar.vue (menú por rol), AppTopBar.vue
+  (selector "Rol Activo" para cambiar de usuario demo).
+UI: components/ui/ConfirmModal, EmptyState, StatCard, StatusBadge, ToastContainer.
+Composables:
+  useRole.js: estado global (currentRole, currentUser, permissions, hasPermission).
+    setRole(role) llama a /auth/switch-demo-user y guarda token en localStorage
+    ('campus_token', 'campus_user', 'campus_role'). Si falla el backend usa usuarios
+    locales falsos. initAuth(): si hay token llama /auth/me, si no auto-login demo.
+    NO HAY PANTALLA DE LOGIN real (api.auth.login existe pero ninguna vista la usa).
+  useToast.js: notificaciones.
+services/api.js: wrapper fetch con Bearer token, BASE_URL '/api/v1', lanza Error con
+  .status y .data. Agrupado: auth, dashboard, points, rewards, redemptions, businesses,
+  rules, campaigns, governance, audit, analytics, integrations, settings (+ alias planos).
+mocks/rewards.js: datos falsos de respaldo.
+PATRÓN EN TODAS LAS PÁGINAS: inicializan con mocks, llaman a la API en onMounted con
+  Promise.allSettled y, si la API responde con datos, reemplazan el mock (mapeando
+  campos). Si falla, se queda el mock en silencio -> la UI puede "verse bien" aunque
+  el backend no responda.
+
+Rutas (router/index.js, sin guards ni meta de permisos):
+  /recompensas/alumno                StudentDashboard     dashboard.getStats
+  /recompensas/alumno/campanas       StudentCampaigns     campaigns.list
+  /recompensas/alumno/catalogo       StudentCatalog       points.getMyBalance, rewards.list, redemptions.create
+  /recompensas/alumno/canjes         StudentRedemptions   redemptions.list, redemptions.cancel
+  /recompensas/alumno/actividad      StudentActivity      points.getMyBalance, points.getMyHistory
+  /recompensas/profesor              ProfessorDashboard   dashboard.getStats, redemptions.deliver
+  /recompensas/profesor/campanas     ProfessorCampaigns   campaigns.list, campaigns.propose
+  /recompensas/profesor/validar      ProfessorValidate    redemptions.validateCode/list/deliver
+  /recompensas/profesor/analitica    ProfessorAnalytics   analytics.getProfessorAnalytics
+  /recompensas/profesor/historial    ProfessorHistory     audit.getLogs
+  /recompensas/admin                 AdminDashboard       dashboard.getStats
+  /recompensas/admin/ledger          AdminLedger          points.getLedger, points.reconcile
+  /recompensas/admin/negocios        AdminBusinesses      businesses.list/create/toggleStatus
+  /recompensas/admin/reglas          AdminRules           rules.list/create/toggleStatus
+  /recompensas/admin/catalogo        AdminCatalog         rewards.list/create/delete
+  /recompensas/admin/canjes          AdminRedemptions     redemptions.list/deliver/cancel
+  /recompensas/admin/gobierno        AdminGovernance      governance.getPolicies/getFraudFlags/reviewFraudFlag/manualAdjustment
+  /recompensas/admin/administracion  AdminGeneral         (estático, sin API)
+  /recompensas/admin/auditoria       AdminAudit           audit.getLogs
+  /recompensas/admin/analitica       AdminAnalytics       analytics.getOverview
+  /recompensas/admin/integracion     AdminObservability   integrations.getLogs/getWebhooks/retryWebhook
+  /recompensas/admin/configuracion   AdminSettings        settings.list/update
+  / y cualquier otra -> /recompensas/alumno
+
+Bugs de contrato front<->back detectados:
+  - api.governance.manualAdjustment llama POST /governance/adjustments, pero la ruta
+    real es POST /governance/manual-adjustment  -> 404.
+  - api.settings.transitionVersion envía {status}, el backend valida {target_status}.
+  - StudentCatalog lee r.valid_until; el modelo usa valid_to. Usa r.business_name, que
+    Reward no tiene.
+  - No hay UI para editar recompensas (rewards.update), negocios (update), reglas
+    (update), campañas (create/update/toggle de admin), versiones de configuración,
+    catálogos, detalle de canje/eventos, correlaciones de auditoría.
+
+
+--------------------------------------------------------------------------------
+10. DISCREPANCIAS DOCUMENTACIÓN (README / DOCUMENTO_PRESENTACION) vs CÓDIGO
+--------------------------------------------------------------------------------
+  - "Tailwind CSS, Heroicons, modo oscuro, npm run lint": no están en package.json
+    (no hay script lint).
+  - "Seeders automáticos al levantar": el entrypoint solo migra; db:seed es manual.
+  - Tipos de ledger "earned/redeemed/reversed/adjusted/expired": en código son
+    earn/redeem/reverse/adjust; 'expired' no existe (no hay caducidad de puntos).
+  - Código de canje "CANJE-A9X1K4": real es "CJ-XXXX-XXXX".
+  - "Se congelan puntos al solicitar": en realidad se DEBITAN (ledger redeem).
+  - Webhook Equipo 3 con HMAC X-Campus-Signature, event_id, eventos
+    marketplace.purchase_completed / refund_issued y respuestas 200/400/401/403:
+    el código no verifica HMAC, usa otro esquema de body (8.1), responde 201/422 y no
+    tiene evento de reembolso.
+  - "Eventos de dominio PointEarnedEvent, RedemptionCreatedEvent...": no existen.
+  - "Integración SSO / académica": solo descriptiva, no hay código.
+  - Colecciones "accounts, ledger_entries, rules, businesses": nombres reales
+    points_accounts, points_ledger, earning_rules, reward_program_memberships.
+  - "13 vistas": hay 22 páginas con ruta.
+  - Puerto Mongo: README 27018, docker-compose default 27017 (el .env de raíz decide).
+
+
+--------------------------------------------------------------------------------
+11. PRUEBAS (backend_respaldo/tests) — 30 tests
+--------------------------------------------------------------------------------
+  Feature/AuthApiTest (4): login token+perfil, rechaza password, me, logout revoca.
+  Feature/PermissionsAndRolesApiTest (4): alumno no ve ledger admin, no ve saldo de
+    otro alumno, no crea reglas; admin accede a endpoints admin.
+  Feature/RewardsAndRedemptionsApiTest (2): ciclo completo de canje; falla sin puntos.
+  Feature/Services/PointsLedgerServiceTest (20): earn (base, fijo, multiplicadores
+    regla/campaña, max por operación, sin regla, fuera de vigencia, daily cap parcial y
+    agotado, idempotencia, auditoría), redeem (débito, insuficiente, idempotencia),
+    reverse (completo, shortfall + fraud flag, no encontrado, idempotencia),
+    balance desde ledger, reconcile.
+  Helper: tests/Concerns/InteractsWithPointsCollections.php. Requieren Mongo rs0.
+  Ejecutar: docker compose exec app php artisan test
+  Frontend: sin tests.
+
+
+--------------------------------------------------------------------------------
+12. DEUDA TÉCNICA / RIESGOS CONOCIDOS
+--------------------------------------------------------------------------------
+  - RedemptionController::store no es atómico: si falla después del redeem, los
+    puntos quedan debitados sin canje. Chequeo de stock no atómico (carrera).
+  - cancel() usa idempotency_key aleatoria para el reverse (doble cancelación
+    concurrente podría devolver puntos dos veces; lo mitiga solo el check de status).
+  - Redemption::TRANSITIONS / ConfigurationVersion::TRANSITIONS: el canje no los usa.
+  - limit_per_user, limit_period_days, max_redemptions_per_day y expiration_days de
+    políticas: definidos en modelos pero no aplicados.
+  - /auth/switch-demo-user es público (aunque solo en APP_ENV local/testing) y emite
+    token de cualquier rol, incluido platform_admin.
+  - APP_DEBUG=true; credenciales de Mongo en .env versionables (revisar .gitignore).
+  - Front oculta fallos del backend con mocks; no hay estados de error visibles.
+  - Sin rutas protegidas en el router del front (cualquiera navega a /admin; la API sí
+    bloquea con 403).
+  - retryWebhook es simulado.
+  - No hay cola real (QUEUE_CONNECTION=sync) ni scheduler.
+
+
+--------------------------------------------------------------------------------
+13. ARCHIVOS CLAVE PARA EMPEZAR A LEER
+--------------------------------------------------------------------------------
+  backend_respaldo/routes/api.php
+  backend_respaldo/config/permissions.php
+  backend_respaldo/app/Services/PointsLedgerService.php
+  backend_respaldo/app/Http/Controllers/Api/RedemptionController.php
+  backend_respaldo/app/Http/Controllers/Api/IntegrationController.php
+  backend_respaldo/app/Models/{Redemption,Reward,RewardItem,PointsLedger,User}.php
+  backend_respaldo/database/seeders/*.php
+  frontend_respaldo/src/services/api.js
+  frontend_respaldo/src/composables/useRole.js
+  frontend_respaldo/src/router/index.js
+  frontend_respaldo/src/pages/**/*.vue
+  docker-compose.yml, docker/php/entrypoint.sh
+
+================================================================================
+FIN
+================================================================================
